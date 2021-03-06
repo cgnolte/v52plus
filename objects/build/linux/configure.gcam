@@ -1,0 +1,218 @@
+### Compile settings for MiniCAM on Linux ###
+### William.Gustafson@pnl.gov; 9-Sep-2008 ###
+
+### load file of system-specific library paths, etc.
+include $(BUILDPATH)/config.system
+
+# CGN: this block set by me for gcc compiler (6.1.0 Nov 2020)
+BOOST_ROOT=/work/MAQSEA/cnolte/lib/boost/boost_1_71_0
+BOOST_INCLUDE=$(BOOST_ROOT)/cgn/include
+BOOST_LIB=$(BOOST_ROOT)/cgn/lib
+XERCES_INCLUDE=/home/cnolte/lib/xerces/xerces-c-3.1.4/src
+XERCES_LIB=/home/cnolte/lib/xerces/xerces-c-3.1.4/src/.libs
+JAVA_HOME=/home/cnolte/lib/jdk-13.0.1
+JAVA_INCLUDE=$(JAVA_HOME)/include
+JAVA_LIB=$(JAVA_HOME)/lib/server
+JARS_LIB=/work/MAQSEA/cnolte/gcam/v5.2/gcam-core/lib/jars/*
+# CGN
+
+# CGN: this block set by me for intel-19.0.5 compiler Feb 2021
+#BOOST_ROOT=/work/MAQSEA/cnolte/lib/boost/boost_1_75_0
+#BOOST_INCLUDE=$(BOOST_ROOT)
+#BOOST_LIB=$(BOOST_ROOT)/stage/lib
+#XERCES_INCLUDE=/home/cnolte/lib/xerces/xerces-c-3.1.4/src
+#XERCES_LIB=/home/cnolte/lib/xerces/xerces-c-3.1.4/src/.libs
+#JAVA_HOME=/home/cnolte/lib/jdk-13.0.1
+#JAVA_INCLUDE=$(JAVA_HOME)/include
+#JAVA_LIB=$(JAVA_HOME)/lib/server
+#JARS_LIB=/work/MAQSEA/cnolte/gcam/v5.2/gcam-core/lib/jars/*
+#CXX=icpc # specify intel c++ compiler
+#CC=icc   # specify intel c compiler
+# CGN
+
+### gcc compiler settings (testing with v4.1.2) ###
+ifeq ($(strip $(CXX)),)
+CXX             = g++
+endif
+ifeq ($(strip $(CC)),)
+CC		= gcc
+endif
+CXXOPTIM        = -O2 -pthread
+CXXDEBUG        = -ggdb -DNDEBUG -DFUSION_MAX_VECTOR_SIZE=30
+CXXBASEOPTS     = $(CXXDEBUG)
+
+ARCH_FLAGS      = 
+ENVLIBS         = 
+
+## sets if we have Java which is required to GCAM output into a BaseX database
+## should a user not be able to use Java they could concievably turn this off
+## and set DEBUG_XML_DB in xml_db_outputter.ccp to just have the data written
+## out as an XML file (having both disabled will send the output to nowhere)
+HAVE_JAVA = 1
+
+## set this to a nonzero value to enable parallel execution (TBB required)
+ifndef USE_GCAM_PARALLEL
+  USE_GCAM_PARALLEL = 0
+endif
+## set this to a nonzero value to enable lapack, which switches to an SVD
+## solver for the N-R and Broyden solvers.  Defaults to off, but can be 
+## overridden in the environment.
+ifndef USE_LAPACK
+USE_LAPACK = 0
+endif
+
+## Check to see if MKL is in use.  We infer this from the existence of
+## the variable MKL_CFLAGS, which gives the location for the MKL
+## include files.  However, an explicit setting of USE_MKL overrides
+## (but woe betide the user who sets USE_MKL=1 and doesn't specify
+## MKL_CFLAGS, MKL_LDFLAGS, MKL_LIB, and MKL_RPATH, for their build
+## shall be cursed.)
+ifndef USE_MKL
+  ifdef MKL_CFLAGS
+    USE_MKL=1
+  else
+    USE_MKL=0
+  endif
+endif
+
+# cgn: attempt to use Intel MKL, following HPC User Guide section 5.3.
+# this appears not to have made any difference
+#USE_MKL=1
+#MKL_LDFLAGS=-lmkl_gf_lp64 -lmkl_core -lmkl_sequential
+#cgn
+
+#### flag indicating whether or not to use hector
+#### If we are using hector, there are some other variables to set.
+USE_HECTOR = 1
+
+ifeq ($(USE_HECTOR),1)
+
+  # hector Makefile is looking for slightly different names for BOOST
+  # include and lib
+  BOOSTROOT=$(BOOST_INCLUDE)
+  BOOSTLIB=$(BOOST_LIB)
+  export BOOSTROOT BOOSTLIB
+
+  HECTOR_INCLUDE = -I../../climate/source/hector/headers
+
+  HECTOR_LIB = -L$(BOOST_LIB) -Wl,-rpath,$(BOOST_LIB) -lhector -lboost_system -lboost_filesystem
+endif  # if(USE_HECTOR==1)
+
+### TBB setup:  On Evergreen, using tap intel-tbb-gnu (or variants for other compilers) will set
+### the TBB_INCDIR and TBB_LIBDIR environment variables.  These lines will create the necessary 
+### options on the compile command lines.  If TBB is in a standard place (like /usr/local), you 
+### can leave the environment variables unset, and the compiler will do the right thing (hopefully).
+ifneq ($(strip $(TBB_INCDIR)),)
+TBB_INCLUDE     = -I$(TBB_INCDIR)
+endif
+#
+ifneq ($(strip $(TBB_LIBDIR)),)
+TBB_LIBRARY     = -L$(TBB_LIBDIR)
+TBB_RPATH	= -Wl,-rpath,$(TBB_LIBDIR)
+endif
+#
+# Set the environment var TBB_LINK_DEBUG to get debugging versions of libraries
+ifneq ($(strip $(TBB_LINK_DEBUG)),1)
+  LIBTBB          = tbb
+  LIBTBBMALLOC    = tbbmalloc
+  LIBTBBMALLOC_PROXY = tbbmalloc_proxy
+else
+  LIBTBB          = tbb_debug
+  LIBTBBMALLOC    = tbbmalloc_debug
+  LIBTBBMALLOC_PROXY = tbbmalloc_proxy_debug
+endif
+#
+ifneq ($(USE_GCAM_PARALLEL),0) 
+TBB_LIB		= -l$(LIBTBB) -l$(LIBTBBMALLOC) -l$(LIBTBBMALLOC_PROXY)
+endif
+
+# Set up Java paths for compiling via environment variables if we are using it
+ifneq ($(HAVE_JAVA),0) 
+## custom values set by environment variables
+OSNAME_LOWERCASE := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+JAVAINC = -I$(JAVA_INCLUDE) -I$(JAVA_INCLUDE)/$(OSNAME_LOWERCASE)
+JAVALIB = -L$(JAVA_LIB)
+JAVA_RPATH = -Wl,-rpath,$(JAVA_LIB)
+JAVALINK = -ljvm
+JARSLIB = -DJARS_LIB="\"$(JARS_LIB)\""
+else
+JAVAINC = 
+JAVALIB = 
+JAVA_RPATH =
+JAVALINK =
+JARSLIB = 
+# override default in GCAM that has Java enabled (__HAVE_JAVA__ = 1)
+CXXBASEOPTS += -D__HAVE_JAVA__=0
+endif
+
+### locations of library include files
+# BOOST_INCLUDE should be set in the user environment on Evergreen by running 'tap boost'.
+BOOSTINC	      = $(BOOST_INCLUDE)
+# Eventually we should be able to get Xerces installed and available by a tap command, 
+# but until then it will have to be set manually
+XERCESINC	      = $(XERCES_INCLUDE)
+
+# Same for the Boost Lapack bindings
+ifneq ($(USE_LAPACK),0)
+  BOOSTBIND      = -I$(BOOST_NUMERIC_BINDINGS)
+  # On evergreen, these variables are set by running 'tap lapack'.  On other systems, set 
+  # manually or using shell scripts.  If MKL is in use, we don't set these.
+  ifeq ($(strip $(LAPACKINC)),)
+    ifeq ($(USE_MKL),0)
+      LAPACKINC  = $(GCAMLIB_HOME)/include
+    endif
+  endif
+
+  ifeq ($(strip $(LAPACKLIB)),)
+    ifeq ($(USE_MKL),0)
+      LAPACKLIB  = $(GCAMLIB_HOME)/lib
+    endif
+  endif
+
+  ifeq ($(USE_MKL),0)
+    LAPACKLD = -L$(LAPACKLIB)
+    LAPACKCF = -I$(LAPACKINC)
+    LAPACK_RPATH	= -Wl,-rpath,$(LAPACKLIB)
+    LAPACKLINK = -llapack -lblas
+  endif
+
+endif
+
+
+#
+### locations of libraries
+LIBDIR		= -L/usr/local/lib -L$(XERCES_LIB) -L$(BUILDPATH) $(JAVALIB) $(TBB_LIBRARY) $(LAPACKLD)
+
+### The rest should be mostly compiler independent
+## Note $(PROF) will be set as needed if we are building the gcam-prof target
+CPPFLAGS	= $(INCLUDE) $(ARCH_FLAGS) $(JARSLIB) -DGCAM_PARALLEL_ENABLED=$(USE_GCAM_PARALLEL) -DUSE_LAPACK=$(USE_LAPACK) -DUSE_HECTOR=$(USE_HECTOR) $(MKL_CFLAGS)
+CXXFLAGS        = $(CXXOPTIM) $(CXXBASEOPTS) $(PROF) -MMD -std=c++14 -Wno-deprecated
+FCFLAGS         = $(FCOPTIM) $(FCBASEOPTS) $(PROF)
+LD              = $(CXX) $(PROF)
+LDFLAGS         = $(CXXFLAGS) -Wl,-rpath,$(XERCES_LIB) $(JAVA_RPATH) $(TBB_RPATH) $(LAPACK_RPATH) $(MKL_LDFLAGS)
+AR              = ar ru
+#MAKE            = make -i -r
+RANLIB          = ranlib
+LIB             = ${ENVLIBS} $(LIBDIR) -lxerces-c $(JAVALINK) $(HECTOR_LIB) $(TBB_LIB) $(LAPACKLINK) -lm
+INCLUDE         = -I$(BOOSTINC) $(JAVAINC) $(TBB_INCLUDE) $(BOOSTBIND) $(HECTOR_INCLUDE) \
+		 -I$(XERCESINC) \
+		 -I${PATHOFFSET} \
+		 -I${HOME}/include \
+		 $(LAPACKCF)
+
+### rule for building the dependency information
+# %.d: %.cpp
+# 	@set -e; rm -f $@; \
+# 	$(CC) -MM $(CPPFLAGS) $< > $@.$$$$; \
+# 	sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
+# 	rm -f $@.$$$$
+
+
+### These will be expanded with whatever the value of OBJS happens to be when they 
+### are referenced.  Each leaf-directory Makefile sets OBJS as appropriate, so this
+### will do the right thing.
+SRCS	 = $(OBJS:.o=.cpp)
+DEPS	 = $(OBJS:.o=.d)
+
+%.o: %.f90
+	$(FC) -c $(FCFLAGS) $(INCLUDE) $<
